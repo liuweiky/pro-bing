@@ -18,14 +18,16 @@ type packetConn interface {
 	SetReadDeadline(t time.Time) error
 	WriteTo(b []byte, dst net.Addr) (int, error)
 	SetTTL(ttl int)
+	SetInterfaceIndex(interfaceIndex int)
 	SetMark(m uint) error
 	SetDoNotFragment() error
 	SetBroadcastFlag() error
 }
 
 type icmpConn struct {
-	c   *icmp.PacketConn
-	ttl int
+	c              *icmp.PacketConn
+	ttl            int
+	interfaceIndex int
 }
 
 func (c *icmpConn) Close() error {
@@ -36,27 +38,31 @@ func (c *icmpConn) SetTTL(ttl int) {
 	c.ttl = ttl
 }
 
+func (c *icmpConn) SetInterfaceIndex(interfaceIndex int) {
+	c.interfaceIndex = interfaceIndex
+}
+
 func (c *icmpConn) SetReadDeadline(t time.Time) error {
 	return c.c.SetReadDeadline(t)
 }
 
-func (c *icmpConn) WriteTo(b []byte, dst net.Addr) (int, error) {
-	if c.c.IPv6PacketConn() != nil {
-		if err := c.c.IPv6PacketConn().SetHopLimit(c.ttl); err != nil {
-			return 0, err
-		}
-	}
-	if c.c.IPv4PacketConn() != nil {
-		if err := c.c.IPv4PacketConn().SetTTL(c.ttl); err != nil {
-			return 0, err
-		}
-	}
-
-	return c.c.WriteTo(b, dst)
-}
-
 type icmpv4Conn struct {
 	icmpConn
+}
+
+func (c *icmpv4Conn) WriteTo(b []byte, dst net.Addr) (int, error) {
+	if err := c.c.IPv4PacketConn().SetTTL(c.ttl); err != nil {
+		return 0, err
+	}
+	var cm *ipv4.ControlMessage
+	if 1 <= c.interfaceIndex {
+		// c.interfaceIndex == 0 if not set interface
+		if err := c.c.IPv4PacketConn().SetControlMessage(ipv4.FlagInterface, true); err != nil {
+			return 0, err
+		}
+		cm = &ipv4.ControlMessage{IfIndex: c.interfaceIndex}
+	}
+	return c.c.IPv4PacketConn().WriteTo(b, cm, dst)
 }
 
 func (c *icmpv4Conn) SetFlagTTL() error {
@@ -82,6 +88,21 @@ func (c icmpv4Conn) ICMPRequestType() icmp.Type {
 
 type icmpV6Conn struct {
 	icmpConn
+}
+
+func (c *icmpV6Conn) WriteTo(b []byte, dst net.Addr) (int, error) {
+	if err := c.c.IPv6PacketConn().SetHopLimit(c.ttl); err != nil {
+		return 0, err
+	}
+	var cm *ipv6.ControlMessage
+	if 1 <= c.interfaceIndex {
+		// c.interfaceIndex == 0 if not set interface
+		if err := c.c.IPv6PacketConn().SetControlMessage(ipv6.FlagInterface, true); err != nil {
+			return 0, err
+		}
+		cm = &ipv6.ControlMessage{IfIndex: c.interfaceIndex}
+	}
+	return c.c.IPv6PacketConn().WriteTo(b, cm, dst)
 }
 
 func (c *icmpV6Conn) SetFlagTTL() error {
